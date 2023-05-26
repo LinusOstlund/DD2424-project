@@ -127,6 +127,7 @@ if __name__ == "__main__":
             args.attention_heads is not None
         ), "Attention heads must be specified for transformer architecture"
 
+    """    
     # set experiment id as an argument
     if args.new_experiment:
         experiment_id = mlflow.create_experiment(args.new_experiment)
@@ -138,7 +139,8 @@ if __name__ == "__main__":
         raise ValueError(
             "Either --new_experiment or --experiment_name must be specified"
         )
-    # TODO make this configurable
+    """
+    # TODO make this configurable (now it just uses the default)
     mlflow.set_tracking_uri(args.tracking_uri)
 
     main(args)
