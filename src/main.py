@@ -60,12 +60,12 @@ def convert_abc_to_midi(run_id) -> None:
     mlflow.log_artifacts(midi_dir, artifact_path="midi")
 
 
-def main(args, experiment_id) -> None:
+def main(args) -> None:
     """
     This is a script wrapper for training a model.
     It is called from the MLproject file.
     """
-    with mlflow.start_run(experiment_id=experiment_id):
+    with mlflow.start_run():
         # fetch run id
         run_id = mlflow.active_run().info.run_id
 
@@ -141,7 +141,7 @@ if __name__ == "__main__":
     # TODO make this configurable
     mlflow.set_tracking_uri(args.tracking_uri)
 
-    main(args, experiment_id)
+    main(args)
 
 """
 
