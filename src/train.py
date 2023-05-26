@@ -4,59 +4,44 @@ import torch.utils.data as tud
 import argparse
 import os
 import matplotlib.pyplot as plt
-from tqdm import tqdm
+from tqdm import tqdm, trange
+
+# used to avoid clustering the repo with checkpoints
+import tempfile
+
 
 from lstm_model import *
 from transf_model import *
 from dataset import *
+import mlflow
 
 
-def pprint(s):
-    s = str(s)
-    pprint.log += s + "\n"
-    print(s)
-
-
-pprint.log = ""
-
-
-def main(args):
-    pprint("Loading data...")
-
-    torch.manual_seed(0)
+def main(args) -> None:
+    torch.manual_seed(args.random_seed)
 
     # load dataset
-    if args.create_data:
-        dataset = MusicDataset(
-            data_file="data/dataset.txt",
-            max_sequence_length=args.max_sequence_length,
-            create_data=True,
-        )
 
-    else:
-        dataset = MusicDataset(
-            data_file="data/dataset.json",
-            vocab_file="data/vocab.json",
-            max_sequence_length=args.max_sequence_length,
-            create_data=False,
-        )
+    dataset = MusicDataset(
+        data_file="data/dataset.json",
+        vocab_file="data/vocab.json",
+        max_sequence_length=args.max_sequence_length,
+    )
 
     vocab_size = dataset.vocab_size
     B = args.batch_size
     L = dataset.max_sequence_length
 
-    if not args.inference:
-        # split data
-        pprint("Creating splits...")
-        train_data, val_data = tud.random_split(
-            dataset, [args.train_ratio, 1 - args.train_ratio]
-        )
+    # split data
+    train_data, val_data = tud.random_split(
+        dataset, [args.train_ratio, 1 - args.train_ratio]
+    )
 
-        # wrap in data loaders
-        train_loader = tud.DataLoader(train_data, batch_size=B, shuffle=True)
-        val_loader = tud.DataLoader(val_data, batch_size=len(val_data), shuffle=True)
+    # TODO gör en split och logga den som artifact?
+    #      fast då faller strukturen i MLproject...
 
-    pprint("Creating model...")
+    # wrap in data loaders
+    train_loader = tud.DataLoader(train_data, batch_size=B, shuffle=True)
+    val_loader = tud.DataLoader(val_data, batch_size=len(val_data), shuffle=True)
 
     # model, optimizer, loss
     if args.architecture == "lstm":
@@ -79,27 +64,27 @@ def main(args):
         )
     else:
         raise ValueError("Invalid architecture, choose lstm or transf.")
-    
-    pprint(model)
 
     # to keep track of epochs across multiple runs
     offset = args.epochs_offset + 1
     # load previous checkpoint
     if args.load != None:
-        pprint(f"Loading checkpoint {args.load}")
+        # TODO detta ska nog vara kvar ändå? Men nu ligger checkpoints i artifacts
         model.load_state_dict(torch.load(args.load))
 
     # check gpu
-    device = "cpu"
     if torch.cuda.is_available():
-        pprint("Using CUDA.")
+        print("Using CUDA.")
         model = model.cuda()
         device = "cuda"
 
     elif torch.backends.mps.is_available():
-        pprint("Using MPS (Apple Silicon)")
-        device = torch.device('mps')
+        print("Using MPS (Apple Silicon)")
+        device = torch.device("mps")
         model.to(device)
+    else:
+        device = "cpu"
+        print("Using CPU.")
 
     # optimizer and loss
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.learning_rate)
@@ -114,23 +99,29 @@ def main(args):
     if args.architecture == "transf":
         model_name += f"_ah={args.attention_heads}"
 
-    # just training
-    if not args.inference:
-        epoch_training_loss = []
-        epoch_validation_loss = []
+    # prepare for training
+    epoch_training_loss = []
+    epoch_validation_loss = []
 
-        if args.ckpt_dir == None:
-            ckpt_dir = f"./{model_name}"
-        else:
-            ckpt_dir = args.ckpt_dir
-        os.makedirs(ckpt_dir, exist_ok=True)
+    # training loop
+    with trange(args.epochs, unit="epoch", ncols=100) as pbar:
+        for e in pbar:
+            pbar.set_description("Epoch %i" % (e + 1))
 
-        pprint("Training started.")
-        for e in range(args.epochs):
             mean_epoch_loss = 0
             batch_num = 0
 
             model.train()
+
+            # make a pbar for each batch
+            batch_pbar = tqdm(
+                range(len(train_loader)),
+                unit="batches",
+                leave=False,
+                desc="Batches",
+                ncols=100,
+            )
+
             for input, target in iter(train_loader):
                 # get the labels
                 target = target.to(device)
@@ -149,12 +140,18 @@ def main(args):
 
                 batch_num += 1
 
+                # Update the progress bar for batches
+                batch_pbar.update()
+
+            # Close the progress bar for batches after each epoch
+            batch_pbar.close()
+
             mean_epoch_loss /= batch_num
             mean_epoch_loss = float(mean_epoch_loss)
             # log
             epoch_training_loss.append(mean_epoch_loss)
             mean_epoch_loss = round(mean_epoch_loss, 6)
-            pprint(f"TRAIN\tEPOCH:{e}/{args.epochs}\tLOSS:{mean_epoch_loss}")
+            mlflow.log_metric("mean_epoch_loss", mean_epoch_loss, step=e)
 
             # validation
             model.eval()
@@ -170,7 +167,8 @@ def main(args):
                 # log
                 epoch_validation_loss.append(validation_loss)
                 validation_loss = round(validation_loss, 6)
-                pprint(f"VAL\tEPOCH:{e}/{args.epochs}\tLOSS:{validation_loss}")
+
+                mlflow.log_metric("validation_loss", validation_loss, step=e)
 
                 if validation_loss > old_validation_loss:
                     patience -= 1
@@ -180,56 +178,43 @@ def main(args):
                 old_validation_loss = validation_loss
 
                 if validation_loss <= min(epoch_validation_loss):
-                    checkpoint_path = f"{ckpt_dir}/best.pytorch"
-                    torch.save(model.state_dict(), checkpoint_path)
-                    pprint("Lowest loss model saved at %s" % checkpoint_path)
+                    with tempfile.NamedTemporaryFile(
+                        prefix=f"checkpoint_{e}", suffix=".pt"
+                    ) as fp:
+                        # use a temporary file to avoid cluttering the directory
+                        torch.save(model.state_dict(), fp.name)
+                        mlflow.log_artifact(fp.name, "state_dicts")
 
-            checkpoint_path = f"{ckpt_dir}/checkpoint.pytorch"
+            pbar.set_postfix(train_loss=mean_epoch_loss, val_loss=validation_loss)
+
             if e % 5 == 0:
-                torch.save(model.state_dict(), checkpoint_path)
-                pprint("Model saved at %s" % checkpoint_path)
+                with tempfile.NamedTemporaryFile(prefix=f"best", suffix=".pt") as fp:
+                    # use a temporary file to avoid cluttering the directory
+                    torch.save(model.state_dict(), fp.name)
+                    mlflow.log_artifact(fp.name, "state_dicts")
 
             if patience == 0:
-                pprint("Patience reached. Early stopping.")
+                mlflow.log_metric("early_stopping", True, step=e)
                 break
 
-    if not args.inference:
-        plt.clf()
-        plt.plot(epoch_training_loss, label="training loss")
-        plt.plot(epoch_validation_loss, label="validation loss")
-        plt.yscale("log")
-        plt.legend()
-        plt.xticks(range(0, args.epochs, max(1, args.epochs // 5)))
-        plt.grid()
-        plt.xlabel("Epochs")
-        plt.ylabel("Loss")
-        plt.savefig(f"{ckpt_dir}/{model_name}.png")
+    # TODO skapa en plot och spara som artificat i MLFlow
+    plt.clf()
+    plt.plot(epoch_training_loss, label="training loss")
+    plt.plot(epoch_validation_loss, label="validation loss")
+    plt.yscale("log")
+    plt.legend()
+    plt.xticks(range(0, args.epochs, max(1, args.epochs // 5)))
+    plt.grid()
+    plt.xlabel("Epochs")
+    plt.ylabel("Loss")
+    with tempfile.NamedTemporaryFile(suffix=".png") as temp:
+        plt.savefig(temp.name, format="png")
 
-    # inference at end of training or because args.inference
-    if args.inference:
-        model.eval()
-        print("Inferenced samples")
-        generation = ""
-        for i in range(args.sample_num):
-            gen = model.inference(
-                dataset.sos_idx,
-                dataset.eos_idx,
-                device=device,
-                mode=args.mode,
-                temperature=args.temperature,
-            )
-            gen = [dataset.i2w[str(i)] for i in gen]
-            s = "".join(gen[1:-1])
-            headers = f"X:{i}\nL:1/8\nQ:120\nM:4/4\nK:C\n"
-            generation += headers + s + "\n"
-            with open(f"generated_{model_name}.abc", "w") as f:
-                f.write(generation)
+        # Log the plot as an artifact in MLflow
+        mlflow.log_artifact(temp.name, "plots")
 
-    if not args.inference:
-        with open(f"{ckpt_dir}/{model_name}.log", "w") as f:
-            f.write(pprint.log)
-
-        return min(epoch_validation_loss)
+    # finally, log the model
+    mlflow.pytorch.log_model(model, "models")
 
 
 if __name__ == "__main__":
@@ -239,28 +224,53 @@ if __name__ == "__main__":
     parser.add_argument("-es", "--embedding_size", type=int, default=16)
     parser.add_argument("-l", "--layers", type=int, default=2)
     parser.add_argument("-dp", "--dropout", type=float, default=0.2)
-    parser.add_argument("-ah", "--attention_heads", type=int, default=2)
+    parser.add_argument("-ah", "--attention_heads", type=int, default=None)
     parser.add_argument("-lr", "--learning_rate", type=float, default=0.01)
     parser.add_argument("-bs", "--batch_size", type=int, default=100)
     parser.add_argument("-tr", "--train_ratio", type=float, default=0.9)
-    parser.add_argument("-cd", "--create_data", action="store_true")
     parser.add_argument("-p", "--patience", type=int, default=5)
     parser.add_argument("-ld", "--load", type=str, default=None)
-    parser.add_argument("-i", "--inference", action="store_true")
-    parser.add_argument("-m", "--mode", type=str, default="greedy")
-    parser.add_argument("-t", "--temperature", type=float, default=1)
-    parser.add_argument("-ml", "--max_sequence_length", type=int, default=512)
-    parser.add_argument("-ckd", "--ckpt_dir", type=str, default=None)
+    parser.add_argument("-ml", "--max_sequence_length", type=int, default=256)
     parser.add_argument("-arch", "--architecture", type=str, default="lstm")
     parser.add_argument("-eo", "--epochs_offset", type=int, default=0)
     parser.add_argument("-n", "--sample_num", type=int, default=1)
+    parser.add_argument("-ne", "--new_experiment", type=str, default=None)
+    parser.add_argument("-en", "--experiment_name", type=str, default=None)
+    parser.add_argument("-rs", "--random_seed", type=int, default=0)
     args = parser.parse_args()
 
-    assert args.architecture in ["lstm", "transf"]
+    # TODO logga alla argument som parametrar i MLFlow
+    assert args.architecture in [
+        "lstm",
+        "transf",
+    ], "Architecture must be either 'lstm' or 'transf'"
 
-    if args.inference:
-        # cannot inference without checkpoint
-        assert args.load != None
+    if args.architecture == "tranf":
+        assert (
+            args.attention_heads is not None
+        ), "Attention heads must be specified for transformer architecture"
 
-    assert args.mode in ["greedy", "topp", "topk"]
-    main(args)
+    # set experiment id as an argument
+    if args.new_experiment:
+        experiment_id = mlflow.create_experiment(args.new_experiment)
+    elif args.experiment_name:
+        experiment_id = mlflow.get_experiment_by_name(
+            args.experiment_name
+        ).experiment_id
+    else:
+        raise ValueError(
+            "Either --new_experiment or --experiment_name must be specified"
+        )
+
+    # log all arguments as parameters
+    with mlflow.start_run(experiment_id=experiment_id):
+        for arg in vars(args):
+            mlflow.log_param(arg, getattr(args, arg))
+
+        main(args)
+
+"""
+
+python src/train.py --epochs 10
+
+"""

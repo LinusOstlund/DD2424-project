@@ -1,0 +1,46 @@
+name: DD2424 Project
+
+python_env: files/config/python_env.yaml
+
+entry_points:
+  main:
+    parameters:
+    # TODO perhaps add datafile?
+      epochs: {type: int, default: 2}
+      hidden_size: {type: int, default: 16}
+      embedding_size: {type: int, default: 16}
+      layers: {type: int, default: 2}
+      dropout: {type: float, default: 0.2}
+    # attention_heads: {type: int, default: null}
+      learning_rate: {type: float, default: 0.01}
+      batch_size: {type: int, default: 100}
+      train_ratio: {type: float, default: 0.9}
+      patience: {type: int, default: 5}
+      max_sequence_length: {type: int, default: 256}
+      architecture: {type: str, default: "lstm"}
+      epochs_offset: {type: int, default: 0}
+      experiment_name: {type: str, default: "Default"}
+      random_seed: {type: int, default: 0}
+      vocab_file: {type: path, default: "data/vocab.json"}
+      mode: {type: str, default: "greedy"}
+      temperature: {type: float, default: 1}
+      sample_num: {type: int, default: 10}
+      tracking_uri: {type: str, default: "http://127.0.0.1:5000"}
+      # convert_to_midi: {type: bool, default: false}
+    command: "python src/main.py -arch {architecture} \
+                              -e {epochs} \ 
+                              -hs {hidden_size} \
+                              -es {embedding_size} \
+                              -l {layers} \
+                              -dp {dropout} \
+                              -lr {learning_rate} \
+                              -bs {batch_size} \
+                              -tr {train_ratio} \
+                              -p {patience} \
+                              -ml {max_sequence_length} \
+                              -n {sample_num} \
+                              -eo {epochs_offset} \
+                              -en {experiment_name} \
+                              -rs {random_seed} \
+                              -tu {tracking_uri} \
+                              -vcb {vocab_file}"
