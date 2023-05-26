@@ -7,57 +7,49 @@ Authors: Linus Östlund and Marco Amoretti
 * Something on the architecture
 * Something on Molly
 
-## How to use
+## How to use with MLFlow
 
 ### Create Virtual Environment
 
-Using either `conda` or `pip`, create a virtual environment. Activate it and then call:
-```
-pip install -r requirements.txt
-```
+1. Install MLFlow:
 
-### Generate data
-
-To generate training data from `dataset.pkl` use:
-```
-python3 src/data_processing/preprocessing.py
-python3 src/data_processing/create_data.py
+```python
+pip install mlflow
 ```
 
-This will convert the pickled dataset to midi files, the midi files to abc notation and then perform a cleaning step that will:
-- remove files with low-occurence tokens (less than 100 occurrences in the whole dataset);
-- reformat all training data in one file (one line per piece, with space-separated tokens).
+2. Open the MLFlow UI in a new terminal. By default the following command opens a GUI at `http://localhost:5000`:
 
-### Train the model (LSTM)
-
-To train a model call:
-```
-python3 src/train.py
+```bash
+mlflow ui
 ```
 
-The command line arguments provide costumization for model size and layers, number of epochs, patience for early stopping and so on.
-A checkpoint for each epoch will be saved in `./ckpts/`.
+3. Run the project by copy-pasting the command below in a fresh terminal. You are going to install a virtual environment, which is cached for future testing.
 
-The flag `-ld {CKPT}` loads a previous checkpoint and continues training from there. The size of the loaded model has to match the provided command line arguments (e.g. if the checkpoint has 3 layers add `-l 3` and similar).
+```bash
+MLFLOW_TRACKING_URI=http://127.0.0.1:5000 \
+ mlflow run git@github.com:LinusOstlund/DD2424-project.git 
+```
+Once the run is complete, you may open the MLFlow GUI and trace the performance. The ABC-notation is saved under the folder `inference`.
 
-### Inference the model
+> **NOTE:** as per [this issue](https://github.com/mlflow/mlflow/issues/608#issuecomment-454316004), the MLFlow Tracking URI has to be set as an environment variable. Odd, and workaround-ish.
 
-To generate from a checkpoint use:
-```
-python3 src/train.py -i -ld {CKPT} -m {'greedy', 'topk', 'topp'} -t {TEMPERATURE}
-```
-The model can be sampled with greedy, Top-P and Top-K sampling. Generation starts from an empty sequence starting with `<sos>` and continues until either the maximum sequence length is reached or a `<eos>` token is generated.
+4. **OPTIONAL**: Test different parameter settings. You may see the full list in [MLproject](/MLproject). For instance, these settings turned out quite good.
 
-Output is printed to the console. To listen to the output:
-- create an ABC-file with the following fields:
+```bash
+MLFLOW_TRACKING_URI=http://127.0.0.1:5000 \
+ mlflow run git@github.com:LinusOstlund/DD2424-project.git \
+ -P epochs=200 \
+ -P hidden_size=64 \
+ -P embedding_size=64 \
+ -P batch_size=32 \
+ -P learning_rate=0.001 \
+ -P mode="topk"
 ```
-X:0
-M:4/4
-L:1/8
-Q:120
-K:C
-```
-- copy all tokens between `<sos>` and `<eos>` and paste them after `K:C`;
-- invoke `abc2midi <abc_file> -o <midi_file>`;
-- listen in your program of choice or with `timidity <midi_file>`
+
+### TODO
+* tidy up...
+* fix so the midi is saved, too
+* fix the "generate data" code, so we can generate it from scratch
+* load a checkpoint to avoid training all the time
+* fix the transformer model
 
