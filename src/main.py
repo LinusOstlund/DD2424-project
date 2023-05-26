@@ -65,23 +65,25 @@ def main(args) -> None:
     This is a script wrapper for training a model.
     It is called from the MLproject file.
     """
-    with mlflow.start_run():
-        # fetch run id
-        run_id = mlflow.active_run().info.run_id
+    active_run = mlflow.start_run()
+    # fetch run id
+    run_id = active_run.info.run_id
 
-        # for arg in vars(args):
-        #    mlflow.log_param(arg, getattr(args, arg))
+    # for arg in vars(args):
+    #    mlflow.log_param(arg, getattr(args, arg))
 
-        # Step 1: train
-        train.main(args)
+    # Step 1: train
+    train.main(args)
 
-        # Step 2: inference (generate samples)
-        args.run_id = run_id
-        inference.main(args)
+    # Step 2: inference (generate samples)
+    args.run_id = run_id
+    inference.main(args)
 
-        # Step 3: evaluate (convert to midi)
-        if args.convert_to_midi:
-            convert_abc_to_midi(run_id)
+    # Step 3: evaluate (convert to midi)
+    if args.convert_to_midi:
+        convert_abc_to_midi(run_id)
+
+    mlflow.end_run()
 
 
 if __name__ == "__main__":
