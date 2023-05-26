@@ -21,7 +21,7 @@ entry_points:
       epochs_offset: {type: int, default: 0}
       experiment_name: {type: str, default: "Default"}
       random_seed: {type: int, default: 0}
-      vocab_file: {type: path, default: "data/vocab.json"}
+      vocab_file: {type: string, default: "data/vocab.json"}
       mode: {type: str, default: "greedy"}
       temperature: {type: float, default: 1}
       sample_num: {type: int, default: 10}
