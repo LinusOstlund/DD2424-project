@@ -131,7 +131,7 @@ def transform_data_to_json(data_file: str, max_sequence_length: int = 256) -> No
 
             # input
             input = ["<sos>"] + tokens
-            input = input[: max_sequence_length]
+            input = input[:max_sequence_length]
 
             # target
             target = tokens[: max_sequence_length - 1]
@@ -167,5 +167,6 @@ def transform_data_to_json(data_file: str, max_sequence_length: int = 256) -> No
         f.write(data)
 
     print("Done")
+
 
 transform_data_to_json("data/dataset.txt")
